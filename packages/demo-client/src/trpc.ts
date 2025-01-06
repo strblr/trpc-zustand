@@ -3,7 +3,7 @@ import {
   splitLink,
   unstable_httpBatchStreamLink,
   unstable_httpSubscriptionLink
-} from "@trpc/react-query";
+} from "@trpc/client";
 import { StateCreator, create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { AppRouter } from "../../../packages/demo-server/router";

@@ -1,84 +1,45 @@
-# trpc-live
+# trpc-zustand
 
-A simple live query solution for [tRPC](https://trpc.io/) applications. Real-time client updates and server-side invalidation with minimal setup. Implemented on top of tRPC subscriptions.
+Zustand bindings for tRPC clients. Manage tRPC queries, mutations and subscriptions as Zustand stores.
 
-## Concepts
+trpc-zustand bridges the gap between [tRPC](https://trpc.io/) and [Zustand](https://zustand.docs.pmnd.rs/), allowing you to use Zustand-specific patterns to manage tRPC operations and their state, including middlewares, store slicing, selectors, React integration, and more. Fully typed and compatible with tRPC v11 and Zustand v5.
 
-- **Live query**: A live query is a query that is re-run when the data it depends on changes.
-- **Live store**: Manages live query subscribers and invalidations on the server. The current implementation is in-memory. Other stores can be implemented in the future (Redis, etc.).
-
-Live queries put the burden on the server to refresh client queries when data changes. This avoids patterns like polling or combining a regular query with a "change" subscription. In practice, `trpc-live` implements live queries on top of tRPC subscriptions. Clients fire a subscription and get an initial result, essentially acting as a regular query. In the background, the server registers the subscription in a store using keys. These keys identify the data that was subscribed to. When the data changes, the server can trigger a targeted re-run by using the keys. The subscription resolver is then re-run and the clients receive the updated result.
+- [Installation](#installation)
+- [Setup](#setup)
+- [Guides](#guides)
+- [API Reference](#api-reference)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Installation
 
-Install `trpc-live`:
+Install `trpc-zustand` and its peer dependencies `@trpc/client`, `@trpc/server`, and `zustand`:
 
 ```bash
-npm install trpc-live
-yarn add trpc-live
-bun add trpc-live
+npm install trpc-zustand @trpc/client @trpc/server zustand
+yarn add trpc-zustand @trpc/client @trpc/server zustand
+bun add trpc-zustand @trpc/client @trpc/server zustand
 ```
 
-## Usage
+## Setup
 
-### Server setup
+Create a tRPC client with `createTRPCZustand`:
 
-Start by creating a single live store. Then create tRPC subscription resolvers with the store's `live` method:
+```ts
+import {
+  splitLink,
+  unstable_httpBatchStreamLink,
+  unstable_httpSubscriptionLink
+} from "@trpc/client";
+import { createTRPCZustand } from "trpc-zustand";
+import { create } from "zustand";
+import type { AppRouter } from "./server";
 
-```typescript
-import { router, publicProcedure } from "./trpc";
-import { InMemoryLiveStore } from "trpc-live";
-
-const liveStore = new InMemoryLiveStore();
-
-export const appRouter = router({
-  getPost: publicProcedure
-    .input(
-      z.object({
-        id: z.string()
-      })
-    )
-    .subscription(
-      liveStore.live({
-        key: ({ input }) => `post:${input.id}`, // Define a key
-        resolver: async ({ input }) => {
-          const post = await fetchPostFromDatabase(input.id); // Get data
-          return {
-            id: input.id,
-            content: post.content,
-            likes: post.likes
-          };
-        }
-      })
-    ),
-
-  likePost: publicProcedure
-    .input(
-      z.object({
-        id: z.string()
-      })
-    )
-    .mutation(async ({ input }) => {
-      await likePostInDatabase(input.id); // Mutate data
-      liveStore.invalidate(`post:${input.id}`); // Invalidate using the key
-      return { success: true };
-    })
-});
-```
-
-In this example, when a post is liked, all subscribers to that post will receive an update.
-
-### Client setup
-
-On the client, live queries are just regular tRPC subscriptions.
-
-Don't forget to configure your tRPC client to support subscriptions:
-
-```typescript
-export const trpcClient = trpc.createClient({
+const trpc = createTRPCZustand<AppRouter>({
   links: [
     splitLink({
       condition: op => op.type === "subscription",
+      // In case you want subscriptions:
       true: unstable_httpSubscriptionLink({ url: "http://localhost:2022" }),
       false: unstable_httpBatchStreamLink({ url: "http://localhost:2022" })
     })
@@ -86,151 +47,319 @@ export const trpcClient = trpc.createClient({
 });
 ```
 
-Refer to the official [tRPC docs](https://trpc.io/) for more information.
+Then create Zustand stores using the client, one store per tRPC operation. The client returns Zustand state creators (the function that takes `set` and `get`) so it works just fine with both React- and vanilla Zustand:
 
-For React, simply use the `useSubscription` hook:
+```ts
+import { create } from "zustand"; // React
 
-```typescript
-export function Post({ id }: { id: string }) {
-  const post = trpc.getPost.useSubscription({ id });
-  const like = trpc.likePost.useMutation();
+export const useTodosStore = create(trpc.todos.getTodos.queryStore());
+export const useAddTodoStore = create(trpc.todos.addTodo.mutationStore());
+```
 
-  if (!post.data) return <div>Loading...</div>;
+```ts
+import { createStore } from "zustand"; // Vanilla
+
+export const todosStore = createStore(trpc.todos.getTodos.queryStore());
+export const addTodoStore = createStore(trpc.todos.addTodo.mutationStore());
+```
+
+You can pass initialization options to the store creator:
+
+```ts
+export const useTodosStore = create(
+  trpc.todos.getTodos.queryStore({ keepPreviousData: false })
+);
+
+export const useAddTodoStore = create(
+  trpc.todos.addTodo.mutationStore({ refetchStores: () => [useTodosStore] })
+);
+```
+
+## Guides
+
+### Vanilla demo
+
+Here is an overview of the API that the tRPC stores expose. For an exhaustive list of methods and properties, see the [API Reference](#api-reference).
+
+```ts
+import { createTRPCZustand } from "trpc-zustand";
+import { createStore } from "zustand";
+import type { AppRouter } from "./server";
+
+const trpc = createTRPCZustand<AppRouter>({
+  /* ... */
+});
+
+const todosStore = createStore(trpc.todos.getTodos.queryStore());
+const addTodoStore = createStore(trpc.todos.addTodo.mutationStore());
+
+// Fetch data
+todosStore.getState().query({ listId: "1" });
+
+// Refetch data (last input)
+todosStore.getState().refetch();
+
+// Disable/enable/reset a store
+todosStore.getState().disable();
+todosStore.getState().enable();
+todosStore.getState().reset();
+
+// Execute a mutation
+addTodoStore.getState().mutate({ listId: "1", title: "Buy milk" });
+
+// Lookup a store's state
+const { data, loading, error } = todosStore.getState();
+const isAddingTodo = addTodoStore.getState().loading;
+
+// Listen to state changes
+const unsubscribe = addTodoStore.subscribe((state, prevState) => {
+  if (state.loading && !prevState.loading) {
+    console.log("Adding todo...");
+  }
+});
+```
+
+### React demo
+
+Everything that works with vanilla stores works on React stores too. But in addition to that, you can use the store as a hook with or without custom selectors. The component will re-render when the selected store state changes. Note: if you only need methods, there is no need to use it as a hook as the methods never change.
+
+```tsx
+import { createTRPCZustand } from "trpc-zustand";
+import { create } from "zustand";
+import type { AppRouter } from "./server";
+
+const trpc = createTRPCZustand<AppRouter>({
+  /* ... */
+});
+
+const useTodosStore = create(trpc.todos.getTodos.queryStore());
+const useAddTodoStore = create(trpc.todos.addTodo.mutationStore());
+
+function TodoList({ listId }: { listId: string }) {
+  // Use the entire store
+  const todos = useTodosStore();
+
+  useEffect(() => {
+    // Fetch data
+    todos.query({ listId });
+  }, [listId]);
+
+  const addTodo = async () => {
+    // Execute a mutation
+    await useAddTodoStore.getState().mutate({ listId, title: "Buy milk" });
+    // Refetch data
+    await todos.refetch();
+  };
+
+  // Display query states and data
+  return (
+    <div>
+      {todos.loading ? (
+        <p>Loading...</p>
+      ) : todos.error ? (
+        <p>Error: {todos.error.message}</p>
+      ) : (
+        todos.data && (
+          <ul>
+            {todos.data.map(todo => (
+              <li key={todo.id}>{todo.title}</li>
+            ))}
+          </ul>
+        )
+      )}
+      <button onClick={addTodo}>Add todo</button>
+      <Loader />
+    </div>
+  );
+}
+
+function Loader() {
+  // Use custom selectors
+  const addTodoLoading = useAddTodoStore(state => state.loading);
+
+  return <p>addTodo is {addTodoLoading ? "loading" : "not loading"}</p>;
+}
+```
+
+### Zustand middlewares
+
+Zustand middlewares will work like with any other Zustand store. The following example persists the data of the latest `getTodos` query in localStorage. When you reload the page, the data will be restored without having to refetch it.
+
+```ts
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+const useTodosStore = create(
+  persist(trpc.todos.getTodos.queryStore(), {
+    name: "todos",
+    partialize: ({ data }) => ({ data })
+  })
+);
+```
+
+### Store slicing
+
+You can compose a tRPC store with other Zustand stores using the [slice pattern](https://zustand.docs.pmnd.rs/guides/slices-pattern), as long as the properties don't conflict.
+
+```ts
+import { create, StateCreator } from "zustand";
+import { createTRPCZustand, InferStore } from "trpc-zustand";
+import type { AppRouter } from "./server";
+
+const trpc = createTRPCZustand<AppRouter>({
+  /* ... */
+});
+
+// Use the InferStore utility to get the store's exact state type
+type DeleteTodoSlice = InferStore<typeof deleteTodoStore>;
+
+type AdditionalSlice = {
+  foo: string;
+  resetFoo: () => void;
+};
+
+const deleteTodoSlice = trpc.todos.deleteTodo.mutationStore();
+
+const additionalSlice: StateCreator<
+  DeleteTodoSlice & AdditionalSlice,
+  [],
+  [],
+  AdditionalSlice
+> = (set, get) => ({
+  foo: "bar",
+  resetFoo: () => set({ foo: get().loading ? "bar" : "baz" })
+});
+
+export const useDeleteTodoStore = create<DeleteTodoSlice & AdditionalSlice>(
+  (...a) => ({
+    ...deleteTodoSlice(...a),
+    ...additionalSlice(...a)
+  })
+);
+```
+
+### Subscriptions
+
+```tsx
+const streamTodosStore = createStore(
+  trpc.todos.streamTodos.subscriptionStore()
+);
+
+// Start a tRPC subscription
+const stop = streamTodosStore.getState().subscribe(
+  { listId },
+  {
+    onData: data => {
+      console.log("New todo:", data);
+    },
+    onError: error => {
+      console.error("Error:", error);
+    }
+  }
+);
+
+// Stop the subscription
+stop();
+```
+
+```tsx
+const useStreamTodosStore = create(trpc.todos.streamTodos.subscriptionStore());
+
+function TodoStream({ listId }: { listId: string }) {
+  const { status, data, error, subscribe } = useStreamTodosStore();
+
+  useEffect(() => {
+    // Start a tRPC subscription
+    return subscribe({ listId });
+  }, [listId]);
 
   return (
     <div>
-      <p>{post.data.content}</p>
-      <p>Likes: {post.data.likes}</p>
-      <button onClick={() => like.mutate({ id })}>Like</button>
+      {error && <p>Error: {error.message}</p>}
+      <p>
+        ({status}) Latest todo: {data?.title}
+      </p>
     </div>
   );
 }
 ```
 
-When you or someone else viewing the same post clicks the "Like" button, the post will update for everyone.
+## API Reference
 
-## Invalidation
+### Queries
 
-The `invalidate` method can be called from anywhere. It will re-run all live queries registered for the given key. In the previous example, we call it in the mutation resolver after updating the data. Here is an example of calling it from a Mongoose hook:
+#### Initialization options
 
-```typescript
-postSchema.post("save", async function (post) {
-  liveStore.invalidate(`thread:${post.threadId}`);
-});
-```
+| Property           | Type      | Description                                                                              |
+| ------------------ | --------- | ---------------------------------------------------------------------------------------- |
+| `enabled`          | `boolean` | Initially enable/disable the store. Optional. Defaults to `true`.                        |
+| `keepPreviousData` | `boolean` | Keep the previous data while a new query is being fetched. Optional. Defaults to `true`. |
 
-You can pass multiple keys to `invalidate`:
+#### Store
 
-```typescript
-liveStore.invalidate(["post:1", "post:2"]); // Invalidate post 1 and 2
-```
+| Property           | Type                           | Description                                                                                       |
+| ------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `enabled`          | `boolean`                      | Tracks the store's enabled state.                                                                 |
+| `keepPreviousData` | `boolean`                      | Tracks if the previous data should be kept while a new query is being fetched.                    |
+| `input`            | `TInput \| undefined`          | The input of the last query.                                                                      |
+| `loading`          | `boolean`                      | Tracks the query's loading state.                                                                 |
+| `data`             | `TData \| undefined`           | The data returned by the last query.                                                              |
+| `error`            | `TRPCClientError \| undefined` | The error thrown by the last query.                                                               |
+| `enable`           | `() => void`                   | Enables the store.                                                                                |
+| `disable`          | `() => void`                   | Disables the store.                                                                               |
+| `toggle`           | `() => void`                   | Toggles the store's enabled state.                                                                |
+| `reset`            | `() => void`                   | Resets the store.                                                                                 |
+| `query`            | `(input, opts) => Promise`     | Fires a query. If there is an ongoing query, it is stopped and the new one is started.            |
+| `refetch`          | `(opts) => Promise`            | Refetches the last query. If there is an ongoing query, it is stopped and the new one is started. |
 
-## Error handling
+### Mutations
 
-Errors are handled just like regular tRPC errors.
+#### Initialization options
 
-```typescript
-liveStore.live({
-  key: ({ input }) => `post:${input.id}`,
-  resolver: async ({ input }) => {
-    const post = await fetchPostFromDatabase(input.id);
-    if (!post) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "Post not found"
-      });
-    }
-    return post;
-  }
-});
-```
+| Property        | Type               | Description                                                                          |
+| --------------- | ------------------ | ------------------------------------------------------------------------------------ |
+| `enabled`       | `boolean`          | Initially enable/disable the store. Optional. Defaults to `true`.                    |
+| `refetchStores` | `() => StoreApi[]` | Calls the `refetch` method on the stores after the mutation is successful. Optional. |
 
-```typescript
-const post = trpc.getPost.useSubscription({ id: "1" });
+#### Store
 
-if (post.error) {
-  return <div>Error: {post.error.message}</div>;
-}
-```
+| Property  | Type                           | Description                                                                                  |
+| --------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `enabled` | `boolean`                      | Tracks the store's enabled state.                                                            |
+| `input`   | `TInput \| undefined`          | The input of the last mutation.                                                              |
+| `loading` | `boolean`                      | Tracks the mutation's loading state.                                                         |
+| `data`    | `TData \| undefined`           | The data returned by the last mutation.                                                      |
+| `error`   | `TRPCClientError \| undefined` | The error thrown by the last mutation.                                                       |
+| `enable`  | `() => void`                   | Enables the store.                                                                           |
+| `disable` | `() => void`                   | Disables the store.                                                                          |
+| `toggle`  | `() => void`                   | Toggles the store's enabled state.                                                           |
+| `reset`   | `() => void`                   | Resets the store.                                                                            |
+| `mutate`  | `(input, opts) => Promise`     | Fires a mutation. If there is an ongoing mutation, it is stopped and the new one is started. |
 
-## Key helper
+### Subscriptions
 
-`trpc-live` provides a `key` helper function to generate stable string keys from arguments. You are not required to use it but it can be useful for live query keys that depend on multiple arguments.
+#### Initialization options
 
-```typescript
-import { key } from "trpc-live";
+| Property  | Type      | Description                                                       |
+| --------- | --------- | ----------------------------------------------------------------- |
+| `enabled` | `boolean` | Initially enable/disable the store. Optional. Defaults to `true`. |
 
-const key1 = key("post");
-const key2 = key("post", { id: postId, version });
-const key3 = key({ query: "post", id: postId, version });
-const key4 = key(["post", postId, version]);
-```
+#### Store
 
-Usage example:
+| Property    | Type                                             | Description                                                           |
+| ----------- | ------------------------------------------------ | --------------------------------------------------------------------- |
+| `enabled`   | `boolean`                                        | Tracks the store's enabled state.                                     |
+| `input`     | `TInput \| undefined`                            | The input of the last subscription.                                   |
+| `status`    | `"idle" \| "connecting" \| "pending" \| "error"` | Tracks the subscription's status.                                     |
+| `data`      | `TData \| undefined`                             | The last data returned by the subscription.                           |
+| `error`     | `TRPCClientError \| undefined`                   | The last error thrown by the subscription.                            |
+| `enable`    | `() => void`                                     | Enables the store.                                                    |
+| `disable`   | `() => void`                                     | Disables the store.                                                   |
+| `toggle`    | `() => void`                                     | Toggles the store's enabled state.                                    |
+| `reset`     | `() => void`                                     | Resets the store.                                                     |
+| `subscribe` | `(input, opts) => () => void`                    | Subscribes to the last subscription. Returns a cancellation function. |
 
-```typescript
-liveStore.live({
-  key: ({ input }) => key("post", { id: input.id, version: input.version }),
-  resolver: async ({ input }) => {
-    // ...
-  }
-});
-
-liveStore.invalidate(key("post", { id: "1", version: "1" }));
-```
-
-## Multiple keys
-
-A live query can register multiple keys. This is useful if you want to be able to invalidate the query in different ways. For example, you might want to invalidate a post by its id, or all posts regardless of id.
-
-```typescript
-liveStore.live({
-  key: ({ input }) => ["post", `post:${input.id}`],
-  resolver: async ({ input }) => {
-    // ...
-  }
-});
-
-liveStore.invalidate("post"); // Invalidate all posts
-liveStore.invalidate("post:1"); // Invalidate post 1
-```
-
-## Count subscribers
-
-You can get the number of active subscribers for a given set of keys:
-
-```typescript
-liveStore.count("post");
-liveStore.count(["post:1", "post:2"]);
-```
-
-## API reference
-
-### `InMemoryLiveStore`
-
-Manages subscriptions and invalidations for live data.
-
-#### Methods
-
-- `invalidate(key: string | string[]): void`
-
-  Invalidates specific keys, triggering corresponding live queries to be re-run.
-
-- `count(key: string | string[]): number`
-
-  Returns the number of active subscribers for a given set of keys.
-
-- `live(options: LiveOptions): SubscriptionResolver`
-
-  Creates a "live query" subscription resolver.
-
-  - `LiveOptions<...>` interface
-    - `key: string | string[] | ((opts: ProcedureResolverOptions<...>) => string | string[])`
-    - `resolver: (opts: ProcedureResolverOptions<...>) => TOutput | Promise<TOutput>`
-
-### `key(...args: any[]): string`
-
-Generates a stable key from provided arguments.
+## Guides
 
 ## Contributing
 

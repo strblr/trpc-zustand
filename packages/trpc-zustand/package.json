@@ -1,5 +1,6 @@
 {
   "name": "trpc-zustand",
+  "description": "Zustand bindings for tRPC. Manage tRPC queries, mutations and subscriptions as Zustand stores.",
   "version": "1.0.0",
   "license": "MIT",
   "repository": {
