@@ -1,0 +1,37 @@
+{
+  "name": "trpc-zustand",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/strblr/trpc-zustand.git"
+  },
+  "homepage": "https://github.com/strblr/trpc-zustand",
+  "bugs": {
+    "url": "https://github.com/strblr/trpc-zustand/issues"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "@trpc/client": "next",
+    "@trpc/server": "next",
+    "typescript": "^5.7.2",
+    "zustand": "^5.0.2"
+  },
+  "peerDependencies": {
+    "@trpc/client": "next",
+    "@trpc/server": "next",
+    "zustand": "^5.0.2"
+  }
+}
