@@ -359,8 +359,6 @@ function TodoStream({ listId }: { listId: string }) {
 | `reset`     | `() => void`                                     | Resets the store.                                                     |
 | `subscribe` | `(input, opts) => () => void`                    | Subscribes to the last subscription. Returns a cancellation function. |
 
-## Guides
-
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request for any features, bug fixes, or improvements.
