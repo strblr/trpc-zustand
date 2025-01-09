@@ -197,6 +197,47 @@ const useTodosStore = create(
 );
 ```
 
+### Refetch after mutation
+
+You can refetch a store after a mutation by passing a `refetchStores` option to the mutation store:
+
+```ts
+const useTodosStore = create(trpc.todos.getTodos.queryStore());
+
+const useAddTodoStore = create(
+  trpc.todos.addTodo.mutationStore({ refetchStores: () => [useTodosStore] })
+);
+
+// Will refetch the todos store after the mutation is successful
+useAddTodoStore.getState().mutate({ listId: "1", title: "Buy milk" });
+```
+
+`refetchStores` is a function that is called after the mutation is successful. Thus you can have arbitrary control over which stores are refetched and when:
+
+```ts
+const useAddTodoStore = create(
+  trpc.todos.addTodo.mutationStore({
+    refetchStores: () => {
+      if (
+        useAddTodoStore.getState().input?.listId ===
+        useTodosStore.getState().input?.listId
+      ) {
+        return [useTodosStore];
+      }
+    }
+  })
+);
+```
+
+If you want to refetch after specific mutation calls only and not as a general rule, just use promise patterns:
+
+```ts
+const addTodo = async () => {
+  await useAddTodoStore.getState().mutate({ listId: "1", title: "Buy milk" });
+  await useTodosStore.getState().refetch();
+};
+```
+
 ### Store slicing
 
 You can compose a tRPC store with other Zustand stores using the [slice pattern](https://zustand.docs.pmnd.rs/guides/slices-pattern), as long as the properties don't conflict.
@@ -211,7 +252,7 @@ const trpc = createTRPCZustand<AppRouter>({
 });
 
 // Use the InferStore utility to get the store's exact state type
-type DeleteTodoSlice = InferStore<typeof deleteTodoStore>;
+type DeleteTodoSlice = InferStore<typeof deleteTodoSlice>;
 
 type AdditionalSlice = {
   foo: string;
@@ -240,6 +281,8 @@ export const useDeleteTodoStore = create<DeleteTodoSlice & AdditionalSlice>(
 
 ### Subscriptions
 
+You can use the `subscribe` method to start a subscription. It returns a cancellation function.
+
 ```tsx
 const streamTodosStore = createStore(
   trpc.todos.streamTodos.subscriptionStore()
@@ -262,6 +305,8 @@ const stop = streamTodosStore.getState().subscribe(
 stop();
 ```
 
+React-style:
+
 ```tsx
 const useStreamTodosStore = create(trpc.todos.streamTodos.subscriptionStore());
 
@@ -270,6 +315,7 @@ function TodoStream({ listId }: { listId: string }) {
 
   useEffect(() => {
     // Start a tRPC subscription
+    // Note: returns the cancellation function as cleanup
     return subscribe({ listId });
   }, [listId]);
 
@@ -309,8 +355,8 @@ function TodoStream({ listId }: { listId: string }) {
 | `disable`          | `() => void`                   | Disables the store.                                                                               |
 | `toggle`           | `() => void`                   | Toggles the store's enabled state.                                                                |
 | `reset`            | `() => void`                   | Resets the store.                                                                                 |
-| `query`            | `(input, opts) => Promise`     | Fires a query. If there is an ongoing query, it is stopped and the new one is started.            |
-| `refetch`          | `(opts) => Promise`            | Refetches the last query. If there is an ongoing query, it is stopped and the new one is started. |
+| `query`            | `(input, opts?) => Promise`    | Fires a query. If there is an ongoing query, it is stopped and the new one is started.            |
+| `refetch`          | `(opts?) => Promise`           | Refetches the last query. If there is an ongoing query, it is stopped and the new one is started. |
 
 ### Mutations
 
@@ -334,7 +380,7 @@ function TodoStream({ listId }: { listId: string }) {
 | `disable` | `() => void`                   | Disables the store.                                                                          |
 | `toggle`  | `() => void`                   | Toggles the store's enabled state.                                                           |
 | `reset`   | `() => void`                   | Resets the store.                                                                            |
-| `mutate`  | `(input, opts) => Promise`     | Fires a mutation. If there is an ongoing mutation, it is stopped and the new one is started. |
+| `mutate`  | `(input, opts?) => Promise`    | Fires a mutation. If there is an ongoing mutation, it is stopped and the new one is started. |
 
 ### Subscriptions
 
@@ -357,7 +403,7 @@ function TodoStream({ listId }: { listId: string }) {
 | `disable`   | `() => void`                                     | Disables the store.                                                   |
 | `toggle`    | `() => void`                                     | Toggles the store's enabled state.                                    |
 | `reset`     | `() => void`                                     | Resets the store.                                                     |
-| `subscribe` | `(input, opts) => () => void`                    | Subscribes to the last subscription. Returns a cancellation function. |
+| `subscribe` | `(input, opts?) => () => void`                   | Subscribes to the last subscription. Returns a cancellation function. |
 
 ## Contributing
 

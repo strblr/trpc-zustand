@@ -86,7 +86,7 @@ type MutationStoreCreatorFactory<
 
 type MutationStoreOptions = {
   enabled?: boolean;
-  refetchStores?: () => StoreApi<{ refetch: () => Promise<any> }>[];
+  refetchStores?: () => StoreApi<{ refetch: () => Promise<any> }>[] | void;
 };
 
 type MutationStoreCreator<
@@ -298,7 +298,7 @@ function mutationStoreCreatorFactory(
           const result = await client.mutation(path, input, opts);
           if (!stopped) {
             set({ loading: false, data: result });
-            refetchStores?.().forEach(store => store.getState().refetch());
+            refetchStores?.()?.forEach(store => store.getState().refetch());
           }
           return result;
         } catch (error) {
